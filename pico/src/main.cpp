@@ -22,6 +22,9 @@ LiquidCrystal_I2C lcd(0x27, 20, 4);
 // Nordic UART Service: the Node server discovers this notify characteristic
 // and receives the newline-delimited JSON sensor readings.
 
+bool advertisingRestartPending = false;
+unsigned long advertisingRestartAt = 0;
+
 class ServerCallbacks : public BLEServerCallbacks {
 public:
     void onConnect(BLEServer *server) override {
@@ -30,7 +33,9 @@ public:
 
     void onDisconnect(BLEServer *server) override {
         Serial.println("BLE central disconnected");
-        BLE.startAdvertising();
+
+        advertisingRestartPending = true;
+        advertisingRestartAt = millis() + 500;
     }
 };
 
@@ -109,9 +114,19 @@ void setup() {
 
 void loop() {
     const unsigned long now = millis();
+
+    if (advertisingRestartPending &&
+        static_cast<long>(now - advertisingRestartAt) >= 0) {
+        advertisingRestartPending = false;
+
+        BLE.startAdvertising();
+        Serial.println("BLE advertising restarted");
+    }
+
     if (lastMeasurementAt == 0 || now - lastMeasurementAt >= MEASUREMENT_INTERVAL_MS) {
         lastMeasurementAt = now;
         measureAndSend();
     }
+
     delay(20);
 }
