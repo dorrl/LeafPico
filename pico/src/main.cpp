@@ -102,7 +102,7 @@ void setup() {
     lcd.init(); lcd.backlight();
     lcd.setCursor(0, 0); lcd.print("Pico Monitoring");
 
-    BLE.begin("SmartFarm-Pico");
+    BLE.begin("Leaf-Pico");
 
     BLEServer *server = BLE.server();
     server->setCallbacks(&serverCallbacks);
