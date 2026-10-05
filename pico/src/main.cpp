@@ -84,7 +84,8 @@ void measureAndSend() {
 
     updateLcdPower(lux);
     if (lcdIsOn) {
-        lcd.setCursor(0, 3); lcd.print("Leaf Pico");
+        lcd.clear();
+        lcd.setCursor(0, 0); lcd.print("Leaf Pico");
         lcd.setCursor(0, 1); lcd.print("Temp:  "); lcd.print(temperature, 1); lcd.print(" C  ");
         lcd.setCursor(0, 2); lcd.print("Moist: "); lcd.print(moisturePercent, 0); lcd.print(" %  ");
         lcd.setCursor(0, 3); lcd.print("Light: "); lcd.print(lux, 1); lcd.print(" lx ");
