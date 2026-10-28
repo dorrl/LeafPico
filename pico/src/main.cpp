@@ -187,6 +187,18 @@ void processHeartbeatInput() {
             continue;
         }
 
+        // Current LeafServer builds may send the escaped terminator as the
+        // two bytes "\\n" instead of a real newline. Accept both forms.
+        if (c == 'n' && !discardHeartbeatLine &&
+            heartbeatLineLength == 5 &&
+            memcmp(heartbeatLineBuffer, "PONG\\\\", 5) == 0) {
+            consecutiveHeartbeatFailures = 0;
+            heartbeatAwaitingResponse = false;
+            heartbeatLineLength = 0;
+            Serial.println("Heartbeat response received");
+            continue;
+        }
+
         if (c == '\n') {
             if (!discardHeartbeatLine) {
                 heartbeatLineBuffer[heartbeatLineLength] = '\0';
