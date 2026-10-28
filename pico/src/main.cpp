@@ -16,7 +16,7 @@
 constexpr unsigned long MEASUREMENT_INTERVAL_MS = 60UL * 1000UL;
 constexpr unsigned long HEARTBEAT_INTERVAL_MS = 10UL * 1000UL;
 constexpr unsigned long HEARTBEAT_TIMEOUT_MS = 5UL * 1000UL;
-constexpr uint8_t MAX_CONSECUTIVE_HEARTBEAT_FAILURES = 3;
+constexpr uint8_t MAX_CONSECUTIVE_HEARTBEAT_FAILURES = 5;
 constexpr unsigned long ADVERTISING_RESTART_DELAY_MS = 500UL;
 
 constexpr float LCD_OFF_LUX = 5.0F;
@@ -191,7 +191,7 @@ void processHeartbeatInput() {
         // two bytes "\\n" instead of a real newline. Accept both forms.
         if (c == 'n' && !discardHeartbeatLine &&
             heartbeatLineLength == 5 &&
-            memcmp(heartbeatLineBuffer, "PONG\\\\", 5) == 0) {
+            memcmp(heartbeatLineBuffer, "PONG\\", 5) == 0) {
             consecutiveHeartbeatFailures = 0;
             heartbeatAwaitingResponse = false;
             heartbeatLineLength = 0;
@@ -265,6 +265,9 @@ void checkHeartbeatTimeout() {
     }
 
     heartbeatAwaitingResponse = false;
+    // Keep failed probes on the same cadence instead of immediately retrying
+    // in the next loop iteration after the 5-second response timeout.
+    lastHeartbeatSentAt = now;
     ++consecutiveHeartbeatFailures;
 
     Serial.print("Heartbeat response timeout (");
