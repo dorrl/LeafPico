@@ -15,7 +15,8 @@
 
 constexpr unsigned long MEASUREMENT_INTERVAL_MS = 60UL * 1000UL;
 constexpr unsigned long HEARTBEAT_INTERVAL_MS = 10UL * 1000UL;
-constexpr unsigned long HEARTBEAT_TIMEOUT_MS = 35UL * 1000UL;
+constexpr unsigned long HEARTBEAT_TIMEOUT_MS = 5UL * 1000UL;
+constexpr uint8_t MAX_CONSECUTIVE_HEARTBEAT_FAILURES = 3;
 constexpr unsigned long ADVERTISING_RESTART_DELAY_MS = 500UL;
 
 constexpr float LCD_OFF_LUX = 5.0F;
@@ -33,10 +34,16 @@ unsigned long advertisingRestartAt = 0;
 
 bool lcdIsOn = true;
 bool heartbeatStarted = false;
+bool heartbeatAwaitingResponse = false;
+uint8_t consecutiveHeartbeatFailures = 0;
 
 unsigned long lastMeasurementAt = 0;
 unsigned long lastHeartbeatSentAt = 0;
-unsigned long lastHeartbeatResponseAt = 0;
+unsigned long heartbeatRequestSentAt = 0;
+
+char heartbeatLineBuffer[32] = {};
+size_t heartbeatLineLength = 0;
+bool discardHeartbeatLine = false;
 
 // BLE callbacks --------------------------------------------------------------
 
@@ -47,8 +54,12 @@ public:
 
         const unsigned long now = millis();
         heartbeatStarted = true;
+        heartbeatAwaitingResponse = false;
+        consecutiveHeartbeatFailures = 0;
         lastHeartbeatSentAt = now;
-        lastHeartbeatResponseAt = now;
+        heartbeatRequestSentAt = 0;
+        heartbeatLineLength = 0;
+        discardHeartbeatLine = false;
 
         advertisingRestartPending = false;
     }
@@ -56,7 +67,14 @@ public:
     void onDisconnect(BLEServer *server) override {
         Serial.println("BLE central disconnected");
 
+        // A disconnected BLE link is not a heartbeat failure. Let the server
+        // reconnect and begin a fresh heartbeat session without rebooting.
         heartbeatStarted = false;
+        heartbeatAwaitingResponse = false;
+        consecutiveHeartbeatFailures = 0;
+        heartbeatLineLength = 0;
+        discardHeartbeatLine = false;
+
         advertisingRestartPending = true;
         advertisingRestartAt =
             millis() + ADVERTISING_RESTART_DELAY_MS;
@@ -152,15 +170,16 @@ void measureAndSend() {
 // to that library's documented UART RX API.
 
 void processHeartbeatInput() {
-    while (bleUart && bleUart.available() > 0) {
+    if (!heartbeatStarted || !bleUart) {
+        return;
+    }
+
+    while (bleUart.available() > 0) {
         const int incoming = bleUart.read();
 
         if (incoming < 0) {
             break;
         }
-
-        static char lineBuffer[32];
-        static size_t lineLength = 0;
 
         const char c = static_cast<char>(incoming);
 
@@ -169,22 +188,33 @@ void processHeartbeatInput() {
         }
 
         if (c == '\n') {
-            lineBuffer[lineLength] = '\0';
+            if (!discardHeartbeatLine) {
+                heartbeatLineBuffer[heartbeatLineLength] = '\0';
 
-            if (strcmp(lineBuffer, "PONG") == 0) {
-                lastHeartbeatResponseAt = millis();
-                Serial.println("Heartbeat response received");
+                if (strcmp(heartbeatLineBuffer, "PONG") == 0) {
+                    // Any valid PONG proves the link is alive and clears the
+                    // consecutive-failure counter.
+                    consecutiveHeartbeatFailures = 0;
+                    heartbeatAwaitingResponse = false;
+                    Serial.println("Heartbeat response received");
+                }
             }
 
-            lineLength = 0;
+            heartbeatLineLength = 0;
+            discardHeartbeatLine = false;
             continue;
         }
 
-        if (lineLength < sizeof(lineBuffer) - 1) {
-            lineBuffer[lineLength++] = c;
+        if (discardHeartbeatLine) {
+            continue;
+        }
+
+        if (heartbeatLineLength < sizeof(heartbeatLineBuffer) - 1) {
+            heartbeatLineBuffer[heartbeatLineLength++] = c;
         } else {
-            // Discard malformed or oversized input.
-            lineLength = 0;
+            // Ignore the entire oversized line until its newline delimiter.
+            heartbeatLineLength = 0;
+            discardHeartbeatLine = true;
         }
     }
 }
@@ -196,11 +226,15 @@ void sendHeartbeat() {
 
     const unsigned long now = millis();
 
-    if (now - lastHeartbeatSentAt < HEARTBEAT_INTERVAL_MS) {
+    // Never send another PING while the previous request is still pending.
+    if (heartbeatAwaitingResponse ||
+        now - lastHeartbeatSentAt < HEARTBEAT_INTERVAL_MS) {
         return;
     }
 
     lastHeartbeatSentAt = now;
+    heartbeatRequestSentAt = now;
+    heartbeatAwaitingResponse = true;
 
     bleUart.println("PING");
     bleUart.flush();
@@ -209,18 +243,26 @@ void sendHeartbeat() {
 }
 
 void checkHeartbeatTimeout() {
-    if (!bleUart || !heartbeatStarted) {
+    if (!bleUart || !heartbeatStarted || !heartbeatAwaitingResponse) {
         return;
     }
 
     const unsigned long now = millis();
+    if (now - heartbeatRequestSentAt < HEARTBEAT_TIMEOUT_MS) {
+        return;
+    }
 
-    if (now - lastHeartbeatResponseAt >= HEARTBEAT_TIMEOUT_MS) {
-        Serial.println("Heartbeat timeout: server is not responding");
-        Serial.println("Rebooting Pico to reset BLE state");
+    heartbeatAwaitingResponse = false;
+    ++consecutiveHeartbeatFailures;
 
-        // Hardware reboot resets the BLE stack and restarts setup(),
-        // including BLE initialization and advertising.
+    Serial.print("Heartbeat response timeout (");
+    Serial.print(consecutiveHeartbeatFailures);
+    Serial.print("/");
+    Serial.print(MAX_CONSECUTIVE_HEARTBEAT_FAILURES);
+    Serial.println(")");
+
+    if (consecutiveHeartbeatFailures >= MAX_CONSECUTIVE_HEARTBEAT_FAILURES) {
+        Serial.println("Three consecutive heartbeat failures; rebooting Pico");
         delay(100);
         rp2040.reboot();
     }
