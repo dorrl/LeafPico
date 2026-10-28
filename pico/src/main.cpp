@@ -187,17 +187,7 @@ void processHeartbeatInput() {
             continue;
         }
 
-        // Current LeafServer builds may send the escaped terminator as the
-        // two bytes "\\n" instead of a real newline. Accept both forms.
-        if (c == 'n' && !discardHeartbeatLine &&
-            heartbeatLineLength == 5 &&
-            memcmp(heartbeatLineBuffer, "PONG\\", 5) == 0) {
-            consecutiveHeartbeatFailures = 0;
-            heartbeatAwaitingResponse = false;
-            heartbeatLineLength = 0;
-            Serial.println("Heartbeat response received");
-            continue;
-        }
+        // The server sends a real newline-terminated PONG; parse it below.
 
         if (c == '\n') {
             if (!discardHeartbeatLine) {
@@ -277,7 +267,7 @@ void checkHeartbeatTimeout() {
     Serial.println(")");
 
     if (consecutiveHeartbeatFailures >= MAX_CONSECUTIVE_HEARTBEAT_FAILURES) {
-        Serial.println("Three consecutive heartbeat failures; rebooting Pico");
+        Serial.println("Heartbeat failure limit reached; rebooting Pico");
         delay(100);
         rp2040.reboot();
     }
