@@ -15,7 +15,7 @@
 
 constexpr unsigned long MEASUREMENT_INTERVAL_MS = 60UL * 1000UL;
 constexpr unsigned long HEARTBEAT_INTERVAL_MS = 10UL * 1000UL;
-constexpr unsigned long HEARTBEAT_TIMEOUT_MS = 5UL * 1000UL;
+constexpr unsigned long HEARTBEAT_TIMEOUT_MS = 8UL * 1000UL;
 constexpr uint8_t MAX_CONSECUTIVE_HEARTBEAT_FAILURES = 5;
 constexpr unsigned long ADVERTISING_RESTART_DELAY_MS = 500UL;
 
@@ -27,7 +27,9 @@ DallasTemperature sensors(&oneWire);
 BH1750 lightMeter;
 LiquidCrystal_I2C lcd(0x27, 20, 4);
 
-BLEServiceUART bleUart(32, 20);
+// Construct at runtime: BLEUUID parses Arduino String values, which are not safe
+// to construct from string literals during global initialization.
+BLEServiceUART *bleUart = nullptr;
 
 bool advertisingRestartPending = false;
 unsigned long advertisingRestartAt = 0;
@@ -100,7 +102,7 @@ void updateLcdPower(float lux) {
 // Sensor readings ------------------------------------------------------------
 
 void sendReading(float temperature, float moisture, float light) {
-    if (!bleUart) {
+    if (bleUart == nullptr || !(*bleUart)) {
         Serial.println("BLE central is not connected");
         return;
     }
@@ -113,8 +115,8 @@ void sendReading(float temperature, float moisture, float light) {
     String json;
     serializeJson(reading, json);
 
-    bleUart.println(json);
-    bleUart.flush();
+    bleUart->println(json);
+    bleUart->flush();
 
     Serial.println(json);
 }
@@ -170,12 +172,12 @@ void measureAndSend() {
 // to that library's documented UART RX API.
 
 void processHeartbeatInput() {
-    if (!heartbeatStarted || !bleUart) {
+    if (!heartbeatStarted || bleUart == nullptr || !(*bleUart)) {
         return;
     }
 
-    while (bleUart.available() > 0) {
-        const int incoming = bleUart.read();
+    while (bleUart->available() > 0) {
+        const int incoming = bleUart->read();
 
         if (incoming < 0) {
             break;
@@ -222,7 +224,7 @@ void processHeartbeatInput() {
 }
 
 void sendHeartbeat() {
-    if (!bleUart || !heartbeatStarted) {
+    if (bleUart == nullptr || !(*bleUart) || !heartbeatStarted) {
         return;
     }
 
@@ -238,8 +240,8 @@ void sendHeartbeat() {
     heartbeatRequestSentAt = now;
     heartbeatAwaitingResponse = true;
 
-    bleUart.println("PING");
-    bleUart.flush();
+    bleUart->println("PING");
+    bleUart->flush();
 
     Serial.println("Heartbeat PING sent");
 }
@@ -292,9 +294,13 @@ void setup() {
 
     BLE.begin("Leaf-Pico");
 
+    // Do this after Arduino runtime initialization so BLEUUID's String parser
+    // receives the full UUID instead of an all-zero UUID from static init.
+    bleUart = new BLEServiceUART(32, 20);
+
     BLEServer *server = BLE.server();
     server->setCallbacks(&serverCallbacks);
-    server->addService(&bleUart);
+    server->addService(bleUart);
 
     BLE.startAdvertising();
 
